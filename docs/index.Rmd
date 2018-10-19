@@ -1,0 +1,147 @@
+
+---
+title: "Report on Housing and Households for the Portland Metro Area"
+output: 
+   tufte::tufte_handout: default
+   tufte::tufte_html: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, message = FALSE, warning = FALSE)
+```
+
+In this report, we explore the trend of households and housing units in the Portland metropolitan area between 2012 and 2017 using data from the American Community Survey. The data are downloaded from the Census Bureau using [the Census API](http://api.census.gov/) and this report is dynamically generated using [R Markdown](https://rmarkdown.rstudio.com).
+
+## Growth of Households and Housing Units by County
+
+As shown in Figure 1, Clackamas County witnessed that its growth of households far outpaced that of housing between 2012 and 2017, while the growth of households and housing matched more closely in Multnomah County and Washington County.
+
+```{r fig-hh-du, fig.cap="Growth of Households and Housing Units by County 2012-17 (2012 value=1). Data Source: US Census Beaurea, American Community Survey 1 year, 2012-17"}
+## Install the tidycensus package if you haven't yet
+#install.packages("tidycensus")
+
+library(tidycensus)
+library(ggplot2)
+library(dplyr)
+
+## setup cenus api key
+## signup your census api key at http://api.census.gov/data/key_signup.html
+#census_api_key("YOUR_CENSUS_API_KEY") # 
+years <- 2012:2017
+variables <- c("B11001_001"= "Total Households",
+               "B25001_001"= "Total Housing Units",
+               "B19013_001"= "Median Household Income",
+               "B25077_001"= "Median Housing Value")
+library(purrr)
+portland_county_raw <- map_df(years, ~get_acs(geography = "county", 
+                                          year = .x, # 2012-2016
+                                          variables = names(variables),  # 
+                                          state = "OR", 
+                                          county = c("Multnomah County", "Washington County", "Clackamas County"),
+                                          geometry = FALSE,
+                                          survey = "acs1") %>% 
+                                  mutate(Year=.x))
+
+portland_county <- portland_county_raw %>% 
+  mutate(County = gsub(" County, Oregon", "", NAME),
+         Variable = variables[variable])
+
+# line chart for household counts & housing units
+portland_county %>% 
+  filter(Variable %in% c("Total Households", "Total Housing Units")) %>% 
+  group_by(County, Variable) %>% 
+  mutate(base=min(estimate), Growth=estimate/base) %>% 
+  ggplot(aes(x=Year, y=Growth, color=Variable)) + 
+  geom_line() + 
+  facet_wrap(~County) +
+  theme(legend.position="bottom", panel.grid.minor = element_blank()) +
+  scale_x_continuous(breaks=2012:2017, labels=c("2012", "", "", "2015", "", "2017"), expand=c(0.05, 0.5)) +
+  scale_y_continuous(breaks=seq(1, 1.08, by=0.02), labels=c("+0%", "+2%", "+4%", "+6%", "+8%"))
+
+hhinc_hval <- portland_county %>% 
+  filter(Variable %in% c("Median Household Income", "Median Housing Value")) %>% 
+  group_by(County, Variable) %>% 
+  mutate(base=min(estimate), growth=round(estimate/base - 1, 2))
+
+hhinc <- hhinc_hval %>% 
+  filter(Year==2017, Variable=="Median Household Income")
+
+hval <- hhinc_hval %>% 
+  filter(Year==2017, Variable=="Median Housing Value")
+```
+
+A question of interest is how much of the housing shortage translated into increase in housing value. Table 1 shows median household income and median housing value. According to these two measures, the gap in housing units in Clackamas County has not brought larger increase in median housing value, as the median housing value increased `r hval %>% filter(County=="Clackamas") %>% pull(growth)*100`% in Clackamas County between 2012 and 2017, lower than the increase in Multnomah County and Washington County (`r hval %>% filter(County=="Multnomah") %>% pull(growth)*100`% and `r hval %>% filter(County=="Washington") %>% pull(growth)*100`%, respectively), while the increase in median household income in the same period are almost similar at `r hhinc %>% filter(County=="Multnomah") %>% pull(growth)*100`-`r hhinc %>% filter(County=="Washington") %>% pull(growth)*100`%.
+
+```{r hhinc-hval}
+library(formattable)
+library(tidyr)
+library(knitr)
+hhinc_val_kable <- hhinc_hval %>% 
+  #mutate(estimate=currency(estimate, digits = 0L),
+  #       moe=currency(moe, digits=2L)) %>% 
+  select(County, Year, Variable, estimate) %>% 
+  spread(Variable, estimate) %>% 
+  arrange(County, Year) %>% 
+  mutate(`Median Household Income`=scales::dollar(`Median Household Income`),
+         `Median Housing Value`=scales::dollar(`Median Housing Value`))
+
+kable(hhinc_val_kable,
+      align=c("l", "c", "r", "r"),
+      caption = "Median Household Income and Median Housing Value by County 2012-17")
+```
+
+```{r, include=FALSE, eval=F}
+portland_tract_hhinc_hval <- get_acs(geography = "tract", 
+                        year = 2016, # 2012-2016
+                        variables = c("B19013_001",  # Median Household Income in the Past 12 Months
+                                      "B25077_001"), # Meidan Housing Value 
+                        state = "OR", 
+                        county = c("Multnomah County", "Washington County", "Clackamas County"),
+                        geometry = TRUE) # load geometry/gis info
+```
+
+<!-- ## Maps of Median Household Income and Median Housing Value by Census Tract (5-Year ACS ending 2016) -->
+
+<!-- Here we dive into higher resolution the spatial distribution of median household income and median housing value at the Census Tract level. -->
+
+```{r fig-tract-hhinc, eval=F, include=F, fig.cap="Census Tract Median Household Income. Data Source: US Census Beaurea, American Community Survey 5-year, 2012-2016"}
+## Install the mapview package if you haven't yet
+#install.packages("mapview")
+library(sf)
+#library(mapview)
+library(dplyr)
+Median_Household_income <- portland_tract_hhinc_hval %>% 
+  filter(variable=="B19013_001") %>% 
+  select(Value=estimate)
+(myplot <- ggplot(Median_Household_income) + 
+  geom_sf(aes(fill = Value)) +
+  coord_sf(datum = NA) + theme_minimal())
+```
+
+```{r fig-tract-hval, eval=F, include=F, fig.cap="Census Tract Median Housing Value. Data Source: US Census Beaurea, American Community Survey 5-year, 2012-2016"}
+Median_Housing_Value <- portland_tract_hhinc_hval %>% 
+  filter(variable=="B25077_001")  %>% 
+  select(Value=estimate)
+(myplot <- ggplot(Median_Housing_Value) + 
+  geom_sf(aes(fill = Value)) +
+  coord_sf(datum = NA) + theme_minimal())
+```
+
+```{r, results="asis", fig.cap="Median Housing Value", include=F, eval=F}
+## Install the mapview package if you haven't yet
+#install.packages("mapview")
+library(sf)
+library(mapview)
+#library(dplyr)
+Median_Household_income <- portland_tract_hhinc_hval %>% 
+  filter(variable=="B19013_001") %>% 
+  select(estimate)
+mapview(Median_Household_income, 
+        col.regions = sf.colors(10), alpha = 0.1)
+
+Median_Housing_Value <- portland_tract_hhinc_hval %>% 
+  filter(variable=="B25077_001")  %>% 
+  select(estimate)
+mapview(Median_Housing_Value, 
+        col.regions = sf.colors(10), alpha = 0.1)
+```
